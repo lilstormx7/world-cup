@@ -42,7 +42,7 @@ import {
     simulateNextDetailedMatch,
 } from './tournament/detailedEngine';
 import { isFirebaseConfigured } from './multiplayer/firebase';
-import { createRoom, joinRoom, subscribeRoom, updateRoom, fetchRoom } from './multiplayer/roomApi';
+import { createRoom, joinRoom, subscribeRoom, commitRoomUpdate, fetchRoom } from './multiplayer/roomApi';
 import { extractShared, mergeSharedIntoState } from './multiplayer/roomState';
 import { loadSession, saveSession, clearSession, isInviteLinkVisit } from './multiplayer/session';
 
@@ -61,7 +61,8 @@ type Action =
     | { type: 'TICK_TIMER' }
     | { type: 'AUTO_DRAFT_PICK'; payload: { managerId: string } }
     | { type: 'START_SIMULATION'; payload?: { seed: number } }
-    | { type: 'ADVANCE_PLAYBACK' };
+    | { type: 'ADVANCE_PLAYBACK' }
+    | { type: '_APPLY_SYNCED'; payload: DraftState };
 
 const initialState: DraftState = {
     status: 'landing',
@@ -319,6 +320,9 @@ function applyAutoDraftPick(state: DraftState, managerId: string): DraftState {
 
 function reducer(state: DraftState, action: Action): DraftState {
     switch (action.type) {
+        case '_APPLY_SYNCED':
+            return action.payload;
+
         case 'ROOM_CONNECTED':
             return mergeSharedIntoState(
                 { ...initialState, revision: 0 },
@@ -600,7 +604,9 @@ export const DraftProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     const managerIdRef = useRef<string | null>(loadSession()?.managerId ?? null);
     const unsubscribeRef = useRef<(() => void) | null>(null);
     const stateRef = useRef(state);
+    const revisionRef = useRef(state.revision);
     stateRef.current = state;
+    revisionRef.current = state.revision;
 
     const clearSubscription = useCallback(() => {
         unsubscribeRef.current?.();
@@ -629,11 +635,25 @@ export const DraftProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     const pushSharedState = useCallback(async (nextState: DraftState) => {
         if (!nextState.roomCode || !isFirebaseConfigured()) return;
         try {
-            const shared = extractShared(nextState);
-            shared.revision = (stateRef.current.revision ?? 0) + 1;
-            await updateRoom(shared);
+            const patch = extractShared(nextState);
+            const committed = await commitRoomUpdate(nextState.roomCode, patch);
+            if (committed.revision > revisionRef.current) {
+                revisionRef.current = committed.revision;
+            }
         } catch {
             setRoomError('Failed to sync room. Check your connection.');
+            try {
+                const shared = await fetchRoom(nextState.roomCode);
+                if (shared) {
+                    revisionRef.current = shared.revision;
+                    rawDispatch({
+                        type: 'SYNC_ROOM',
+                        payload: { shared, managerId: managerIdRef.current },
+                    });
+                }
+            } catch {
+                /* resync failed */
+            }
         }
     }, []);
 
@@ -678,10 +698,14 @@ export const DraftProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             const next = reducer(prev, action);
             if (next === prev) return;
 
-            rawDispatch(action);
-
             if (next.roomCode && SYNC_ACTIONS.has(action.type)) {
-                void pushSharedState(next);
+                const nextRevision = revisionRef.current + 1;
+                revisionRef.current = nextRevision;
+                const synced = { ...next, revision: nextRevision };
+                rawDispatch({ type: '_APPLY_SYNCED', payload: synced });
+                void pushSharedState(synced);
+            } else {
+                rawDispatch(action);
             }
         },
         [pushSharedState],

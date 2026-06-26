@@ -110,6 +110,35 @@ export async function updateRoom(shared: SharedRoomState): Promise<void> {
     await set(roomRef(shared.roomCode), shared);
 }
 
+/** Atomically merge `patch` onto the current room and bump revision. */
+export async function commitRoomUpdate(
+    roomCode: string,
+    patch: SharedRoomState,
+): Promise<SharedRoomState> {
+    const code = roomCode.toUpperCase();
+    let resultShared: SharedRoomState | null = null;
+
+    const txResult = await runTransaction(roomRef(code), (current) => {
+        if (!current) return current;
+        const room = current as SharedRoomState;
+        const { revision: _revision, roomCode: _roomCode, ...fields } = patch;
+        const updated: SharedRoomState = {
+            ...room,
+            ...fields,
+            roomCode: room.roomCode,
+            revision: room.revision + 1,
+        };
+        resultShared = updated;
+        return updated;
+    });
+
+    if (!txResult.committed || !resultShared) {
+        throw new Error('Room update was not committed');
+    }
+
+    return resultShared;
+}
+
 export function subscribeRoom(
     roomCode: string,
     onUpdate: (shared: SharedRoomState) => void,

@@ -328,7 +328,7 @@ export const Lobby: React.FC = () => {
             {!isHost && (
                 <div className="bg-slate-800/30 rounded-xl border border-slate-700/50 p-4 text-sm text-slate-400">
                     <p>
-                        Waiting for host to configure the room.
+                        Waiting for host to start the formation phase.
                         {settings.allTime
                             ? ' Teams: 2014, 2018, 2022.'
                             : ` Teams: ${settings.yearStart}–${settings.yearEnd}.`}

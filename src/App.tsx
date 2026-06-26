@@ -7,7 +7,7 @@ import { DraftBoard } from './components/DraftBoard';
 import { PostDraftScreen } from './components/PostDraftScreen';
 
 function AppContent() {
-    const { state, dispatch } = useDraft();
+    const { state, dispatch, roomError, clearRoomError } = useDraft();
     const isGroupReveal =
         state.status === 'post_draft' &&
         state.settings.simulationStyle === 'detailed' &&
@@ -48,6 +48,18 @@ function AppContent() {
             <main
                 className={`w-full ${mainWidth} flex-grow flex flex-col glass-panel rounded-2xl p-6 shadow-2xl relative overflow-hidden bg-slate-900/50 backdrop-blur-sm border border-slate-700`}
             >
+                {roomError && state.status !== 'landing' && (
+                    <div className="mb-4 flex items-start justify-between gap-3 bg-red-500/10 border border-red-500/40 text-red-300 rounded-lg px-4 py-3 text-sm">
+                        <span>{roomError}</span>
+                        <button
+                            type="button"
+                            onClick={clearRoomError}
+                            className="shrink-0 text-red-300/80 hover:text-red-200 font-medium"
+                        >
+                            Dismiss
+                        </button>
+                    </div>
+                )}
                 {state.status === 'landing' && <Landing />}
                 {state.status === 'lobby' && <Lobby />}
                 {state.status === 'formation_select' && <FormationSelect />}
