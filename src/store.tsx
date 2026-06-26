@@ -39,7 +39,7 @@ import {
 import { isFirebaseConfigured } from './multiplayer/firebase';
 import { createRoom, joinRoom, subscribeRoom, updateRoom, fetchRoom } from './multiplayer/roomApi';
 import { extractShared, mergeSharedIntoState } from './multiplayer/roomState';
-import { loadSession, saveSession } from './multiplayer/session';
+import { loadSession, saveSession, clearSession, isInviteLinkVisit } from './multiplayer/session';
 
 type Action =
     | { type: 'CREATE_ROOM'; payload: { roomCode: string; manager: ManagerInput } }
@@ -494,6 +494,11 @@ export const DraftProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }, []);
 
     useEffect(() => {
+        if (isInviteLinkVisit()) {
+            clearSession();
+            return;
+        }
+
         const session = loadSession();
         if (!session || !isFirebaseConfigured()) return;
 
@@ -592,9 +597,8 @@ export const DraftProvider: React.FC<{ children: ReactNode }> = ({ children }) =
                     setIsConnecting(true);
 
                     try {
-                        const session = loadSession();
                         const managerInput: ManagerInput = {
-                            id: session?.roomCode === code ? session.managerId : newManagerId(),
+                            id: newManagerId(),
                             name,
                             isHost: false,
                         };

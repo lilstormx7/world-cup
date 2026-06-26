@@ -25,3 +25,13 @@ export function loadSession(): LocalSession | null {
 export function clearSession(): void {
     sessionStorage.removeItem(SESSION_KEY);
 }
+
+export function readRoomCodeFromUrl(): string {
+    const params = new URLSearchParams(window.location.search);
+    return (params.get('room') ?? '').toUpperCase().slice(0, 6);
+}
+
+/** Invite links should start a fresh join flow, not rejoin as another tab's user. */
+export function isInviteLinkVisit(): boolean {
+    return readRoomCodeFromUrl().length > 0;
+}
