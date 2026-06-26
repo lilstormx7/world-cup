@@ -26,6 +26,23 @@ export interface SharedRoomState {
     managerDraftProgress: Record<string, import('../types').ManagerDraftProgress>;
 }
 
+/** Strip undefined values so Firebase RTDB accepts the payload. */
+export function sanitizeForFirebase<T>(value: T): T {
+    if (value === null || typeof value !== 'object') {
+        return value;
+    }
+    if (Array.isArray(value)) {
+        return value.map((item) => sanitizeForFirebase(item)) as T;
+    }
+    const result: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+        if (val !== undefined) {
+            result[key] = sanitizeForFirebase(val);
+        }
+    }
+    return result as T;
+}
+
 export function createInitialSharedRoom(
     roomCode: string,
     host: Manager,
@@ -54,7 +71,7 @@ export function extractShared(state: DraftState): SharedRoomState {
     if (!state.roomCode) {
         throw new Error('Cannot extract shared state without roomCode');
     }
-    return {
+    return sanitizeForFirebase({
         revision: state.revision ?? 0,
         status: state.status,
         roomCode: state.roomCode,
@@ -75,7 +92,7 @@ export function extractShared(state: DraftState): SharedRoomState {
         simulationSeed: state.simulationSeed,
         turnStartedAt: state.turnStartedAt,
         managerDraftProgress: state.managerDraftProgress,
-    };
+    });
 }
 
 export function mergeSharedIntoState(

@@ -10,6 +10,7 @@ import type { ManagerInput, Manager } from '../types';
 import { getFirebaseDatabase } from './firebase';
 import {
     createInitialSharedRoom,
+    sanitizeForFirebase,
     type SharedRoomState,
 } from './roomState';
 
@@ -116,27 +117,32 @@ export async function commitRoomUpdate(
     patch: SharedRoomState,
 ): Promise<SharedRoomState> {
     const code = roomCode.toUpperCase();
-    let resultShared: SharedRoomState | null = null;
+    const dbRef = roomRef(code);
 
-    const txResult = await runTransaction(roomRef(code), (current) => {
-        if (!current) return current;
+    await get(dbRef);
+
+    const txResult = await runTransaction(dbRef, (current) => {
+        if (current == null) return;
         const room = current as SharedRoomState;
         const { revision: _revision, roomCode: _roomCode, ...fields } = patch;
-        const updated: SharedRoomState = {
+        return sanitizeForFirebase({
             ...room,
             ...fields,
             roomCode: room.roomCode,
             revision: room.revision + 1,
-        };
-        resultShared = updated;
-        return updated;
+        });
     });
 
-    if (!txResult.committed || !resultShared) {
+    if (!txResult.committed) {
         throw new Error('Room update was not committed');
     }
 
-    return resultShared;
+    const committed = txResult.snapshot.val() as SharedRoomState | null;
+    if (!committed) {
+        throw new Error('Room missing after update');
+    }
+
+    return committed;
 }
 
 export function subscribeRoom(

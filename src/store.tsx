@@ -640,7 +640,8 @@ export const DraftProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             if (committed.revision > revisionRef.current) {
                 revisionRef.current = committed.revision;
             }
-        } catch {
+        } catch (err) {
+            console.error('Failed to sync room:', err);
             setRoomError('Failed to sync room. Check your connection.');
             try {
                 const shared = await fetchRoom(nextState.roomCode);
