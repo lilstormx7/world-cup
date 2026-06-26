@@ -1,14 +1,16 @@
 import React, { useMemo } from 'react';
 import { useDraft } from '../store';
-import { SquadPlayer, playerRatings } from '../data';
+import { SquadPlayer, playerRatings, FormationId } from '../data';
 import { getNationalTeamById, getSelectablePlayers, isPlayerDraftedGlobally } from '../draftLogic';
 import { resolvePlayerRating } from '../ratings/resolveOverall';
 import { Search } from 'lucide-react';
+
 interface PlayerListProps {
     onDraft: (player: SquadPlayer) => void;
     managerId: string;
     isMyTurn: boolean;
     activeNationalTeamId: string | null;
+    formation: FormationId | null;
 }
 
 export const PlayerList: React.FC<PlayerListProps> = ({
@@ -16,24 +18,21 @@ export const PlayerList: React.FC<PlayerListProps> = ({
     managerId,
     isMyTurn,
     activeNationalTeamId,
+    formation,
 }) => {
     const { state } = useDraft();
     const [search, setSearch] = React.useState('');
 
-    const manager = state.managers.find((m) => m.id === managerId);
     const team = getNationalTeamById(activeNationalTeamId);
 
     const { selectableIds, playersWithStatus } = useMemo(() => {
-        if (!team || !manager?.formation) {
+        if (!team) {
             return { selectableIds: new Set<string>(), playersWithStatus: [] };
         }
 
-        const selectable = getSelectablePlayers(
-            team,
-            manager.formation,
-            state.draftedPlayers,
-            managerId,
-        );
+        const selectable = formation
+            ? getSelectablePlayers(team, formation, state.draftedPlayers, managerId)
+            : [];
         const selectableSet = new Set(selectable.map((p) => p.id));
 
         const players = team.players
@@ -59,7 +58,7 @@ export const PlayerList: React.FC<PlayerListProps> = ({
             );
 
         return { selectableIds: selectableSet, playersWithStatus: players };
-    }, [team, manager, state.draftedPlayers, state.settings, managerId, search]);
+    }, [team, formation, state.draftedPlayers, state.settings, managerId, search]);
 
     if (!team) {
         return (
@@ -93,15 +92,22 @@ export const PlayerList: React.FC<PlayerListProps> = ({
                         />
                     </div>
                 </div>
-                <p className="text-xs text-slate-500">
-                    {selectableIds.size} selectable ·{' '}
-                    {playersWithStatus.filter((p) => p.alreadyDrafted).length} already drafted ·{' '}
-                    {
-                        playersWithStatus.filter((p) => !p.selectable && !p.alreadyDrafted)
-                            .length
-                    }{' '}
-                    blocked by your formation
-                </p>
+                {!formation ? (
+                    <p className="text-xs text-amber-400">
+                        Formation not loaded — return to formation select or refresh. Squad shown
+                        below for reference.
+                    </p>
+                ) : (
+                    <p className="text-xs text-slate-500">
+                        {selectableIds.size} selectable ·{' '}
+                        {playersWithStatus.filter((p) => p.alreadyDrafted).length} already drafted ·{' '}
+                        {
+                            playersWithStatus.filter((p) => !p.selectable && !p.alreadyDrafted)
+                                .length
+                        }{' '}
+                        blocked by your formation ({formation})
+                    </p>
+                )}
             </div>
 
             <div className="flex-1 overflow-auto p-4 custom-scrollbar">
@@ -146,9 +152,9 @@ export const PlayerList: React.FC<PlayerListProps> = ({
                             </div>
                             <button
                                 onClick={() => onDraft(player)}
-                                disabled={!selectable || !isMyTurn}
+                                disabled={!selectable || !isMyTurn || !formation}
                                 className={`px-4 py-2 rounded-lg font-bold text-sm transition-all shrink-0
-                                    ${selectable && isMyTurn
+                                    ${selectable && isMyTurn && formation
                                         ? 'bg-brand-accent/20 text-brand-accent hover:bg-brand-accent hover:text-white border border-brand-accent/30'
                                         : 'bg-slate-800 text-slate-600 cursor-not-allowed border border-slate-700'
                                     }`}
@@ -159,7 +165,7 @@ export const PlayerList: React.FC<PlayerListProps> = ({
                     ))}
                     {playersWithStatus.length === 0 && (
                         <div className="col-span-full py-8 text-center text-slate-500">
-                            No players available in this squad.
+                            No players in this squad match your search.
                         </div>
                     )}
                 </div>

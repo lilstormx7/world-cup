@@ -9,6 +9,7 @@ import { getNationalTeamById, getSelectablePlayers, PICKS_PER_MANAGER } from '..
 export const DraftBoard: React.FC = () => {
     const { state, dispatch } = useDraft();
     const myManager = state.managers.find((m) => m.id === state.currentUser?.id);
+    const myFormation = myManager?.formation ?? state.currentUser?.formation ?? null;
     const myProgress = state.currentUser
         ? state.managerDraftProgress[state.currentUser.id]
         : undefined;
@@ -19,11 +20,11 @@ export const DraftBoard: React.FC = () => {
     ).length;
 
     const handleDraftPlayer = (player: SquadPlayer) => {
-        if (!isMyTurn || !myManager?.formation || !activeTeam || !state.currentUser) return;
+        if (!isMyTurn || !myFormation || !activeTeam || !state.currentUser) return;
 
         const selectable = getSelectablePlayers(
             activeTeam,
-            myManager.formation,
+            myFormation,
             state.draftedPlayers,
             state.currentUser.id,
         );
@@ -100,6 +101,7 @@ export const DraftBoard: React.FC = () => {
                             managerId={state.currentUser?.id ?? ''}
                             isMyTurn={isMyTurn}
                             activeNationalTeamId={myProgress?.activeNationalTeamId ?? null}
+                            formation={myFormation}
                         />
                     ) : (
                         <div className="flex items-center justify-center h-full text-slate-400 p-8 text-center">
@@ -112,20 +114,20 @@ export const DraftBoard: React.FC = () => {
             </div>
 
             <div className="w-full lg:w-80 flex flex-col gap-4">
-                {myManager?.formation && state.currentUser && (
+                {myFormation && state.currentUser && (
                     <div className="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
                         <h3 className="font-bold text-lg mb-3 text-white border-b border-slate-700 pb-2">
                             My Formation
                         </h3>
                         <FormationPitch
-                            formationId={myManager.formation}
+                            formationId={myFormation}
                             draftedPlayers={state.draftedPlayers}
                             managerId={state.currentUser.id}
                             compact
                         />
                         <div className="mt-3 flex justify-between text-xs text-slate-400">
                             <span>{myPickCount}/{PICKS_PER_MANAGER} picked</span>
-                            <span>{myManager.rerollsRemaining} rerolls left</span>
+                            <span>{myManager?.rerollsRemaining ?? 0} rerolls left</span>
                         </div>
                     </div>
                 )}

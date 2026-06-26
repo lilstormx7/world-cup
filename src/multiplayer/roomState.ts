@@ -83,10 +83,14 @@ export function mergeSharedIntoState(
     shared: SharedRoomState,
     managerId: string | null,
 ): DraftState {
-    const currentUser =
-        managerId != null
-            ? (shared.managers.find((m) => m.id === managerId) ?? state.currentUser)
-            : state.currentUser;
+    const matchedManager =
+        managerId != null ? shared.managers.find((m) => m.id === managerId) : null;
+    const currentUser = matchedManager
+        ? {
+              ...matchedManager,
+              formation: matchedManager.formation ?? state.currentUser?.formation ?? null,
+          }
+        : state.currentUser;
 
     return {
         ...state,
