@@ -100,12 +100,16 @@ export function mergeSharedIntoState(
     shared: SharedRoomState,
     managerId: string | null,
 ): DraftState {
+    const managers = shared.managers.map((m) => ({
+        ...m,
+        formation: m.formation ?? null,
+    }));
     const matchedManager =
-        managerId != null ? shared.managers.find((m) => m.id === managerId) : null;
+        managerId != null ? managers.find((m) => m.id === managerId) : null;
     const currentUser = matchedManager
         ? {
               ...matchedManager,
-              formation: matchedManager.formation ?? state.currentUser?.formation ?? null,
+              formation: matchedManager.formation ?? null,
           }
         : state.currentUser;
 
@@ -115,7 +119,7 @@ export function mergeSharedIntoState(
         status: shared.status,
         roomCode: shared.roomCode,
         settings: shared.settings,
-        managers: shared.managers,
+        managers,
         draftOrder: shared.draftOrder,
         currentTurnIndex: shared.currentTurnIndex,
         draftedPlayers: shared.draftedPlayers,

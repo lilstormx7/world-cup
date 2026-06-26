@@ -121,8 +121,12 @@ export function getNationalTeamById(id: string | null): NationalTeam | null {
     return nationalTeams.find((t) => t.id === id) ?? null;
 }
 
+export function hasSubmittedFormation(manager: Pick<Manager, 'formation'>): boolean {
+    return manager.formation != null;
+}
+
 export function allManagersHaveFormation(managers: Manager[]): boolean {
-    return managers.length > 0 && managers.every((m) => m.formation !== null);
+    return managers.length > 0 && managers.every((m) => hasSubmittedFormation(m));
 }
 
 export function generateSnakeDraft(managers: string[], rounds: number): string[] {

@@ -1,19 +1,25 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useDraft } from '../store';
 import { FORMATIONS, FormationId } from '../data';
-import { allManagersHaveFormation } from '../draftLogic';
+import { allManagersHaveFormation, hasSubmittedFormation } from '../draftLogic';
 import { LayoutGrid, Check, Play } from 'lucide-react';
 
 export const FormationSelect: React.FC = () => {
     const { state, dispatch } = useDraft();
     const myManager = state.managers.find((m) => m.id === state.currentUser?.id);
-    const hasSubmitted = myManager?.formation !== null;
+    const hasSubmitted = myManager != null && hasSubmittedFormation(myManager);
     const isHost = state.currentUser?.isHost;
     const allSubmitted = allManagersHaveFormation(state.managers);
 
     const [pendingFormation, setPendingFormation] = useState<FormationId | null>(
         myManager?.formation ?? null,
     );
+
+    useEffect(() => {
+        if (!hasSubmittedFormation(myManager ?? { formation: null })) {
+            setPendingFormation(null);
+        }
+    }, [state.status, myManager?.id, myManager?.formation]);
 
     const handleSelect = (formation: FormationId) => {
         if (!state.currentUser || hasSubmitted) return;
@@ -41,7 +47,7 @@ export const FormationSelect: React.FC = () => {
                 </h3>
                 <ul className="space-y-2">
                     {state.managers.map((m) => {
-                        const submitted = m.formation !== null;
+                        const submitted = hasSubmittedFormation(m);
                         return (
                             <li
                                 key={m.id}
