@@ -126,6 +126,15 @@ export interface DraftState {
     /** Last simulated match shown in detailed mode. */
     lastSimulatedMatchId: string | null;
 
+    /** Monotonic room revision from Firebase (for sync). */
+    revision: number;
+
+    /** Shared seed for deterministic tournament simulation. */
+    simulationSeed?: number;
+
+    /** Epoch ms when the current draft turn timer started. */
+    turnStartedAt?: number;
+
 }
 
 

@@ -1,4 +1,13 @@
-import React, { createContext, useContext, useReducer, ReactNode } from 'react';
+import React, {
+    createContext,
+    useCallback,
+    useContext,
+    useEffect,
+    useReducer,
+    useRef,
+    useState,
+    ReactNode,
+} from 'react';
 import {
     DraftState,
     Manager,
@@ -27,10 +36,16 @@ import {
     prepareDetailedTournament,
     simulateNextDetailedMatch,
 } from './tournament/detailedEngine';
+import { isFirebaseConfigured } from './multiplayer/firebase';
+import { createRoom, joinRoom, subscribeRoom, updateRoom, fetchRoom } from './multiplayer/roomApi';
+import { extractShared, mergeSharedIntoState } from './multiplayer/roomState';
+import { loadSession, saveSession } from './multiplayer/session';
 
 type Action =
     | { type: 'CREATE_ROOM'; payload: { roomCode: string; manager: ManagerInput } }
     | { type: 'JOIN_ROOM'; payload: { roomCode: string; manager: ManagerInput } }
+    | { type: 'ROOM_CONNECTED'; payload: { shared: import('./multiplayer/roomState').SharedRoomState; manager: Manager } }
+    | { type: 'SYNC_ROOM'; payload: { shared: import('./multiplayer/roomState').SharedRoomState; managerId: string | null } }
     | { type: 'ADD_MOCK_MANAGER'; payload: ManagerInput }
     | { type: 'UPDATE_ROOM_SETTINGS'; payload: Partial<RoomSettings> }
     | { type: 'SET_FORMATION'; payload: { managerId: string; formation: import('./data').FormationId } }
@@ -38,7 +53,7 @@ type Action =
     | { type: 'DRAFT_PLAYER'; payload: { player: SquadPlayer; managerId: string } }
     | { type: 'REROLL'; payload: { managerId: string } }
     | { type: 'TICK_TIMER' }
-    | { type: 'START_SIMULATION' }
+    | { type: 'START_SIMULATION'; payload?: { seed: number } }
     | { type: 'ADVANCE_PLAYBACK' };
 
 const initialState: DraftState = {
@@ -57,10 +72,15 @@ const initialState: DraftState = {
     playbackIndex: 0,
     revealIndex: 0,
     lastSimulatedMatchId: null,
+    revision: 0,
 };
 
 function createManager(base: ManagerInput): Manager {
     return { ...base, formation: null, rerollsRemaining: 3 };
+}
+
+function newManagerId(): string {
+    return globalThis.crypto?.randomUUID?.() ?? Date.now().toString();
 }
 
 function assignTeamForCurrentPicker(state: DraftState, excludeIds: string[] = []): DraftState {
@@ -79,6 +99,7 @@ function assignTeamForCurrentPicker(state: DraftState, excludeIds: string[] = []
         ...state,
         activeNationalTeamId: team.id,
         timer: state.settings.draftTimeSeconds,
+        turnStartedAt: Date.now(),
         logs: [...state.logs, `${state.managers.find((m) => m.id === managerId)?.name} draws ${team.country} ${team.year}.`],
     };
 }
@@ -128,6 +149,18 @@ function maybeBeginDraft(state: DraftState): DraftState {
 
 function reducer(state: DraftState, action: Action): DraftState {
     switch (action.type) {
+        case 'ROOM_CONNECTED':
+            return mergeSharedIntoState(
+                { ...initialState, revision: 0 },
+                action.payload.shared,
+                action.payload.manager.id,
+            );
+
+        case 'SYNC_ROOM': {
+            if (action.payload.shared.revision <= state.revision) return state;
+            return mergeSharedIntoState(state, action.payload.shared, action.payload.managerId);
+        }
+
         case 'CREATE_ROOM':
             return {
                 ...initialState,
@@ -137,6 +170,7 @@ function reducer(state: DraftState, action: Action): DraftState {
                 managers: [createManager(action.payload.manager)],
                 currentUser: createManager(action.payload.manager),
                 logs: [`Room ${action.payload.roomCode} created by ${action.payload.manager.name}.`],
+                revision: 1,
             };
 
         case 'JOIN_ROOM':
@@ -145,8 +179,9 @@ function reducer(state: DraftState, action: Action): DraftState {
                 status: 'lobby',
                 roomCode: action.payload.roomCode,
                 managers: [...state.managers, createManager(action.payload.manager)],
-                currentUser: state.currentUser || createManager(action.payload.manager),
+                currentUser: createManager(action.payload.manager),
                 logs: [...state.logs, `${action.payload.manager.name} joined the room.`],
+                revision: state.revision + 1,
             };
 
         case 'ADD_MOCK_MANAGER': {
@@ -196,6 +231,7 @@ function reducer(state: DraftState, action: Action): DraftState {
         }
 
         case 'START_DRAFT': {
+            if (!state.currentUser?.isHost) return state;
             const managers = state.managers.map((m) =>
                 m.name.startsWith('Bot')
                     ? { ...m, formation: m.formation ?? pickRandomFormation() }
@@ -290,6 +326,7 @@ function reducer(state: DraftState, action: Action): DraftState {
                         : state.currentUser,
                 activeNationalTeamId: team?.id ?? null,
                 timer: state.settings.draftTimeSeconds,
+                turnStartedAt: Date.now(),
                 logs,
             };
         }
@@ -301,7 +338,7 @@ function reducer(state: DraftState, action: Action): DraftState {
             };
 
         case 'START_SIMULATION': {
-            const seed = Date.now();
+            const seed = action.payload?.seed ?? state.simulationSeed ?? Date.now();
             const isFast = state.settings.simulationStyle === 'fast';
 
             if (isFast) {
@@ -313,6 +350,7 @@ function reducer(state: DraftState, action: Action): DraftState {
                 );
                 return {
                     ...state,
+                    simulationSeed: seed,
                     tournament,
                     managerResults,
                     simulationPhase: 'complete',
@@ -331,6 +369,7 @@ function reducer(state: DraftState, action: Action): DraftState {
             );
             return {
                 ...state,
+                simulationSeed: seed,
                 tournament,
                 managerResults: undefined,
                 simulationPhase: 'revealing',
@@ -392,14 +431,242 @@ function reducer(state: DraftState, action: Action): DraftState {
     }
 }
 
-const DraftContext = createContext<
-    { state: DraftState; dispatch: React.Dispatch<Action> } | undefined
->(undefined);
+const SYNC_ACTIONS = new Set<Action['type']>([
+    'ADD_MOCK_MANAGER',
+    'UPDATE_ROOM_SETTINGS',
+    'SET_FORMATION',
+    'START_DRAFT',
+    'DRAFT_PLAYER',
+    'REROLL',
+    'TICK_TIMER',
+    'START_SIMULATION',
+    'ADVANCE_PLAYBACK',
+]);
+
+type DraftContextValue = {
+    state: DraftState;
+    dispatch: (action: Action) => void;
+    isConnecting: boolean;
+    roomError: string | null;
+    clearRoomError: () => void;
+};
+
+const DraftContext = createContext<DraftContextValue | undefined>(undefined);
 
 export const DraftProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-    const [state, dispatch] = useReducer(reducer, initialState);
+    const [state, rawDispatch] = useReducer(reducer, initialState);
+    const [isConnecting, setIsConnecting] = useState(false);
+    const [roomError, setRoomError] = useState<string | null>(null);
+    const managerIdRef = useRef<string | null>(loadSession()?.managerId ?? null);
+    const unsubscribeRef = useRef<(() => void) | null>(null);
+    const stateRef = useRef(state);
+    stateRef.current = state;
+
+    const clearSubscription = useCallback(() => {
+        unsubscribeRef.current?.();
+        unsubscribeRef.current = null;
+    }, []);
+
+    const subscribeToRoom = useCallback(
+        (roomCode: string) => {
+            clearSubscription();
+            if (!isFirebaseConfigured()) return;
+
+            unsubscribeRef.current = subscribeRoom(
+                roomCode,
+                (shared) => {
+                    rawDispatch({
+                        type: 'SYNC_ROOM',
+                        payload: { shared, managerId: managerIdRef.current },
+                    });
+                },
+                () => setRoomError('Lost connection to the room.'),
+            );
+        },
+        [clearSubscription],
+    );
+
+    const pushSharedState = useCallback(async (nextState: DraftState) => {
+        if (!nextState.roomCode || !isFirebaseConfigured()) return;
+        const shared = extractShared(nextState);
+        shared.revision = (stateRef.current.revision ?? 0) + 1;
+        await updateRoom(shared);
+    }, []);
+
+    useEffect(() => {
+        const session = loadSession();
+        if (!session || !isFirebaseConfigured()) return;
+
+        managerIdRef.current = session.managerId;
+        setIsConnecting(true);
+        subscribeToRoom(session.roomCode);
+
+        fetchRoom(session.roomCode)
+            .then((shared) => {
+                if (!shared) {
+                    setRoomError('Saved room no longer exists.');
+                    return;
+                }
+                const manager = shared.managers.find((m) => m.id === session.managerId);
+                if (!manager) {
+                    setRoomError('Could not rejoin saved room.');
+                    return;
+                }
+                rawDispatch({
+                    type: 'ROOM_CONNECTED',
+                    payload: { shared, manager },
+                });
+            })
+            .catch(() => setRoomError('Could not rejoin room.'))
+            .finally(() => setIsConnecting(false));
+
+        return clearSubscription;
+    }, [subscribeToRoom, clearSubscription]);
+
+    const dispatch = useCallback(
+        (action: Action) => {
+            if (action.type === 'CREATE_ROOM') {
+                void (async () => {
+                    const name = action.payload.manager.name.trim();
+                    if (!name) {
+                        setRoomError('Enter your manager name');
+                        return;
+                    }
+
+                    setRoomError(null);
+                    setIsConnecting(true);
+
+                    try {
+                        const managerInput: ManagerInput = {
+                            id: newManagerId(),
+                            name,
+                            isHost: true,
+                        };
+
+                        if (!isFirebaseConfigured()) {
+                            const code = action.payload.roomCode;
+                            saveSession(code, managerInput.id);
+                            managerIdRef.current = managerInput.id;
+                            rawDispatch({
+                                type: 'CREATE_ROOM',
+                                payload: { roomCode: code, manager: managerInput },
+                            });
+                            return;
+                        }
+
+                        const { roomCode, manager } = await createRoom(managerInput);
+                        saveSession(roomCode, manager.id);
+                        managerIdRef.current = manager.id;
+                        subscribeToRoom(roomCode);
+                        const shared = await fetchRoom(roomCode);
+                        if (shared) {
+                            rawDispatch({
+                                type: 'ROOM_CONNECTED',
+                                payload: { shared, manager },
+                            });
+                        }
+                    } catch {
+                        setRoomError('Could not create room. Check Firebase configuration.');
+                    } finally {
+                        setIsConnecting(false);
+                    }
+                })();
+                return;
+            }
+
+            if (action.type === 'JOIN_ROOM') {
+                void (async () => {
+                    const name = action.payload.manager.name.trim();
+                    const code = action.payload.roomCode.trim().toUpperCase();
+
+                    if (!name) {
+                        setRoomError('Enter your manager name');
+                        return;
+                    }
+                    if (!code) {
+                        setRoomError('Enter the room code');
+                        return;
+                    }
+
+                    setRoomError(null);
+                    setIsConnecting(true);
+
+                    try {
+                        const session = loadSession();
+                        const managerInput: ManagerInput = {
+                            id: session?.roomCode === code ? session.managerId : newManagerId(),
+                            name,
+                            isHost: false,
+                        };
+
+                        if (!isFirebaseConfigured()) {
+                            saveSession(code, managerInput.id);
+                            managerIdRef.current = managerInput.id;
+                            rawDispatch({
+                                type: 'JOIN_ROOM',
+                                payload: { roomCode: code, manager: managerInput },
+                            });
+                            return;
+                        }
+
+                        const result = await joinRoom(code, managerInput);
+                        if (!result.ok) {
+                            setRoomError(result.error);
+                            return;
+                        }
+
+                        saveSession(code, result.manager.id);
+                        managerIdRef.current = result.manager.id;
+                        subscribeToRoom(code);
+                        rawDispatch({
+                            type: 'ROOM_CONNECTED',
+                            payload: { shared: result.shared, manager: result.manager },
+                        });
+                    } catch {
+                        setRoomError('Could not join room. Check Firebase configuration.');
+                    } finally {
+                        setIsConnecting(false);
+                    }
+                })();
+                return;
+            }
+
+            if (action.type === 'START_SIMULATION') {
+                const seed = stateRef.current.simulationSeed ?? Date.now();
+                const simAction: Action = { type: 'START_SIMULATION', payload: { seed } };
+                const next = reducer(stateRef.current, simAction);
+                if (next === stateRef.current) return;
+                rawDispatch(simAction);
+                void pushSharedState(next);
+                return;
+            }
+
+            const prev = stateRef.current;
+            const next = reducer(prev, action);
+            if (next === prev) return;
+
+            rawDispatch(action);
+
+            if (next.roomCode && SYNC_ACTIONS.has(action.type)) {
+                if (action.type === 'TICK_TIMER' && !prev.currentUser?.isHost) return;
+                void pushSharedState(next);
+            }
+        },
+        [pushSharedState, subscribeToRoom],
+    );
+
     return (
-        <DraftContext.Provider value={{ state, dispatch }}>{children}</DraftContext.Provider>
+        <DraftContext.Provider
+            value={{
+                state,
+                dispatch,
+                isConnecting,
+                roomError,
+                clearRoomError: () => setRoomError(null),
+            }}
+        >
+            {children}
+        </DraftContext.Provider>
     );
 };
 

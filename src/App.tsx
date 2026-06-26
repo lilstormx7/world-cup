@@ -22,13 +22,13 @@ function AppContent() {
         state.status === 'post_draft' && state.simulationPhase === 'complete';
 
     useEffect(() => {
-        if (state.status === 'drafting') {
+        if (state.status === 'drafting' && state.currentUser?.isHost) {
             const timer = setInterval(() => {
                 dispatch({ type: 'TICK_TIMER' });
             }, 1000);
             return () => clearInterval(timer);
         }
-    }, [state.status, dispatch]);
+    }, [state.status, state.currentUser?.isHost, dispatch]);
 
     const mainWidth = isGroupReveal
         ? 'max-w-screen-2xl'

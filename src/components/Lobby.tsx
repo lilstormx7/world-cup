@@ -3,7 +3,7 @@ import { useDraft } from '../store';
 import { ALL_CONTINENTS, Continent } from '../types';
 import { YEAR_OPTIONS } from '../data';
 import { filterNationalTeams } from '../draftLogic';
-import { Users, Play, UserPlus, Settings, Globe, Calendar, Timer, Eye, Zap, Film, Star } from 'lucide-react';
+import { Users, Play, UserPlus, Settings, Globe, Calendar, Timer, Eye, Zap, Film, Star, Link2 } from 'lucide-react';
 import type { RatingScope, SimulationStyle } from '../types';
 import { formatRatingScope } from '../ratings/resolveOverall';
 
@@ -62,6 +62,17 @@ export const Lobby: React.FC = () => {
         });
     };
 
+    const copyInviteLink = async () => {
+        if (!state.roomCode) return;
+        const url = `${window.location.origin}${window.location.pathname}?room=${state.roomCode}`;
+        try {
+            await navigator.clipboard.writeText(url);
+            alert('Invite link copied to clipboard!');
+        } catch {
+            prompt('Copy this invite link:', url);
+        }
+    };
+
     return (
         <div className="flex flex-col h-full animate-fade-in gap-8">
             <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 border-b border-slate-700 pb-4">
@@ -80,12 +91,21 @@ export const Lobby: React.FC = () => {
 
                 <div className="flex gap-3 flex-wrap">
                     <button
-                        onClick={addMockUser}
+                        onClick={copyInviteLink}
                         className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded-lg transition-colors"
                     >
-                        <UserPlus size={18} />
-                        Add Bot (Dev)
+                        <Link2 size={18} />
+                        Copy Invite Link
                     </button>
+                    {isHost && (
+                        <button
+                            onClick={addMockUser}
+                            className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded-lg transition-colors"
+                        >
+                            <UserPlus size={18} />
+                            Add Bot (Dev)
+                        </button>
+                    )}
                     {isHost && (
                         <button
                             onClick={handleStart}
