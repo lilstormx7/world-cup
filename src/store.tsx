@@ -17,6 +17,7 @@ import {
     DEFAULT_ROOM_SETTINGS,
     Continent,
     ManagerDraftProgress,
+    GameStatus,
 } from './types';
 import { SquadPlayer, playerRatings } from './data';
 import { resolvePlayerSimValue } from './ratings/resolveOverall';
@@ -105,6 +106,21 @@ const SYNC_ACTIONS = new Set<Action['type']>([
     'START_SIMULATION',
     'ADVANCE_PLAYBACK',
 ]);
+
+const PHASE_RANK: Record<GameStatus, number> = {
+    landing: 0,
+    lobby: 1,
+    formation_select: 2,
+    drafting: 3,
+    post_draft: 4,
+};
+
+function shouldApplySharedUpdate(state: DraftState, shared: import('./multiplayer/roomState').SharedRoomState): boolean {
+    if (shared.revision > state.revision) return true;
+    if (shared.revision < state.revision) return false;
+    const incomingStatus = shared.status ?? state.status;
+    return PHASE_RANK[incomingStatus] > PHASE_RANK[state.status];
+}
 
 function createManager(base: ManagerInput): Manager {
     return { ...base, formation: null, rerollsRemaining: 3 };
@@ -331,7 +347,7 @@ function reducer(state: DraftState, action: Action): DraftState {
             );
 
         case 'SYNC_ROOM': {
-            if (action.payload.shared.revision <= state.revision) return state;
+            if (!shouldApplySharedUpdate(state, action.payload.shared)) return state;
             return mergeSharedIntoState(state, action.payload.shared, action.payload.managerId);
         }
 
@@ -632,14 +648,13 @@ export const DraftProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         [clearSubscription],
     );
 
-    const pushSharedState = useCallback(async (nextState: DraftState) => {
-        if (!nextState.roomCode || !isFirebaseConfigured()) return;
+    const pushSharedState = useCallback(async (nextState: DraftState): Promise<boolean> => {
+        if (!nextState.roomCode || !isFirebaseConfigured()) return false;
         try {
             const patch = extractShared(nextState);
             const committed = await commitRoomUpdate(nextState.roomCode, patch);
-            if (committed.revision > revisionRef.current) {
-                revisionRef.current = committed.revision;
-            }
+            revisionRef.current = committed.revision;
+            return true;
         } catch (err) {
             console.error('Failed to sync room:', err);
             setRoomError('Failed to sync room. Check your connection.');
@@ -655,6 +670,7 @@ export const DraftProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             } catch {
                 /* resync failed */
             }
+            return false;
         }
     }, []);
 
@@ -700,11 +716,18 @@ export const DraftProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             if (next === prev) return;
 
             if (next.roomCode && SYNC_ACTIONS.has(action.type)) {
-                const nextRevision = revisionRef.current + 1;
-                revisionRef.current = nextRevision;
-                const synced = { ...next, revision: nextRevision };
+                const expectedRevision = revisionRef.current + 1;
+                const synced = { ...next, revision: expectedRevision };
                 rawDispatch({ type: '_APPLY_SYNCED', payload: synced });
-                void pushSharedState(synced);
+                void pushSharedState(synced).then((ok) => {
+                    if (!ok) return;
+                    if (revisionRef.current !== expectedRevision) {
+                        rawDispatch({
+                            type: '_APPLY_SYNCED',
+                            payload: { ...synced, revision: revisionRef.current },
+                        });
+                    }
+                });
             } else {
                 rawDispatch(action);
             }

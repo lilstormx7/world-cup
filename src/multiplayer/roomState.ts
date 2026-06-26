@@ -1,6 +1,7 @@
 import type { DraftState } from '../types';
 import type { Manager } from '../types';
 import { DEFAULT_ROOM_SETTINGS } from '../types';
+import { createEmptyManagerDraftProgress } from '../draftLogic';
 
 /** Room state persisted in Firebase (everything except per-client currentUser). */
 export interface SharedRoomState {
@@ -100,7 +101,7 @@ export function mergeSharedIntoState(
     shared: SharedRoomState,
     managerId: string | null,
 ): DraftState {
-    const managers = shared.managers.map((m) => ({
+    const managers = (shared.managers ?? []).map((m) => ({
         ...m,
         formation: m.formation ?? null,
     }));
@@ -113,28 +114,42 @@ export function mergeSharedIntoState(
           }
         : state.currentUser;
 
+    const status = shared.status ?? state.status;
+    const settings = shared.settings ?? state.settings;
+    let managerDraftProgress = shared.managerDraftProgress ?? {};
+
+    if (status === 'drafting') {
+        const filled = { ...managerDraftProgress };
+        for (const manager of managers) {
+            if (!filled[manager.id]) {
+                filled[manager.id] = createEmptyManagerDraftProgress(settings);
+            }
+        }
+        managerDraftProgress = filled;
+    }
+
     return {
         ...state,
         revision: shared.revision,
-        status: shared.status,
+        status,
         roomCode: shared.roomCode,
-        settings: shared.settings,
+        settings,
         managers,
-        draftOrder: shared.draftOrder,
-        currentTurnIndex: shared.currentTurnIndex,
-        draftedPlayers: shared.draftedPlayers,
-        timer: shared.timer,
-        logs: shared.logs,
-        activeNationalTeamId: shared.activeNationalTeamId,
+        draftOrder: shared.draftOrder ?? [],
+        currentTurnIndex: shared.currentTurnIndex ?? 0,
+        draftedPlayers: shared.draftedPlayers ?? [],
+        timer: shared.timer ?? state.timer,
+        logs: shared.logs ?? [],
+        activeNationalTeamId: shared.activeNationalTeamId ?? null,
         tournament: shared.tournament,
         managerResults: shared.managerResults,
-        simulationPhase: shared.simulationPhase,
-        playbackIndex: shared.playbackIndex,
-        revealIndex: shared.revealIndex,
-        lastSimulatedMatchId: shared.lastSimulatedMatchId,
+        simulationPhase: shared.simulationPhase ?? state.simulationPhase,
+        playbackIndex: shared.playbackIndex ?? 0,
+        revealIndex: shared.revealIndex ?? 0,
+        lastSimulatedMatchId: shared.lastSimulatedMatchId ?? null,
         simulationSeed: shared.simulationSeed,
         turnStartedAt: shared.turnStartedAt,
-        managerDraftProgress: shared.managerDraftProgress ?? {},
+        managerDraftProgress,
         currentUser,
     };
 }

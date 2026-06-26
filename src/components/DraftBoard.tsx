@@ -4,28 +4,40 @@ import { PlayerList } from './PlayerList';
 import { FormationPitch } from './FormationPitch';
 import { Clock, RefreshCw } from 'lucide-react';
 import { SquadPlayer } from '../data';
-import { getNationalTeamById, getSelectablePlayers, PICKS_PER_MANAGER } from '../draftLogic';
+import {
+    getNationalTeamById,
+    getSelectablePlayers,
+    hasSubmittedFormation,
+    PICKS_PER_MANAGER,
+} from '../draftLogic';
 
 export const DraftBoard: React.FC = () => {
     const { state, dispatch } = useDraft();
+    const draftedPlayers = state.draftedPlayers ?? [];
+    const logs = state.logs ?? [];
     const myManager = state.managers.find((m) => m.id === state.currentUser?.id);
-    const myFormation = myManager?.formation ?? state.currentUser?.formation ?? null;
+    const myFormation =
+        (myManager && hasSubmittedFormation(myManager) ? myManager.formation : null) ??
+        (state.currentUser && hasSubmittedFormation(state.currentUser)
+            ? state.currentUser.formation
+            : null);
     const myProgress = state.currentUser
         ? state.managerDraftProgress[state.currentUser.id]
         : undefined;
-    const isMyTurn = Boolean(myProgress && !myProgress.isComplete);
+    const isDrafting = Boolean(myProgress && !myProgress.isComplete);
     const activeTeam = getNationalTeamById(myProgress?.activeNationalTeamId ?? null);
-    const myPickCount = state.draftedPlayers.filter(
-        (p) => p.pickedBy === state.currentUser?.id,
-    ).length;
+    const myPickCount = draftedPlayers.filter((p) => p.pickedBy === state.currentUser?.id).length;
 
     const handleDraftPlayer = (player: SquadPlayer) => {
-        if (!isMyTurn || !myFormation || !activeTeam || !state.currentUser) return;
+        if (!isDrafting || !myFormation || !state.currentUser) return;
+
+        const team = getNationalTeamById(myProgress?.activeNationalTeamId ?? null);
+        if (!team) return;
 
         const selectable = getSelectablePlayers(
-            activeTeam,
+            team,
             myFormation,
-            state.draftedPlayers,
+            draftedPlayers,
             state.currentUser.id,
         );
         if (!selectable.some((p) => p.id === player.id)) return;
@@ -37,7 +49,7 @@ export const DraftBoard: React.FC = () => {
     };
 
     const handleReroll = () => {
-        if (!isMyTurn || !state.currentUser) return;
+        if (!isDrafting || !state.currentUser) return;
         const remaining = myManager?.rerollsRemaining ?? 0;
         if (remaining <= 0) return alert('No rerolls remaining.');
         dispatch({ type: 'REROLL', payload: { managerId: state.currentUser.id } });
@@ -57,7 +69,7 @@ export const DraftBoard: React.FC = () => {
                             ) : (
                                 <>
                                     Your draft
-                                    {isMyTurn && (
+                                    {isDrafting && (
                                         <span className="bg-brand-accent text-white text-xs px-2 py-1 rounded animate-pulse">
                                             DRAFTING
                                         </span>
@@ -65,7 +77,7 @@ export const DraftBoard: React.FC = () => {
                                 </>
                             )}
                         </h2>
-                        {activeTeam && isMyTurn && (
+                        {activeTeam && isDrafting && (
                             <p className="text-slate-400 text-sm mt-1">
                                 Drafting from{' '}
                                 <span className="text-white font-semibold">
@@ -74,7 +86,7 @@ export const DraftBoard: React.FC = () => {
                             </p>
                         )}
                     </div>
-                    {isMyTurn && (
+                    {isDrafting && (
                         <div className="flex items-center gap-3">
                             <button
                                 onClick={handleReroll}
@@ -95,11 +107,11 @@ export const DraftBoard: React.FC = () => {
                 </div>
 
                 <div className="flex-1 bg-slate-800/50 rounded-xl border border-slate-700 overflow-hidden flex flex-col min-h-[320px]">
-                    {isMyTurn ? (
+                    {isDrafting ? (
                         <PlayerList
                             onDraft={handleDraftPlayer}
                             managerId={state.currentUser?.id ?? ''}
-                            isMyTurn={isMyTurn}
+                            isMyTurn={isDrafting}
                             activeNationalTeamId={myProgress?.activeNationalTeamId ?? null}
                             formation={myFormation}
                         />
@@ -107,7 +119,7 @@ export const DraftBoard: React.FC = () => {
                         <div className="flex items-center justify-center h-full text-slate-400 p-8 text-center">
                             {myProgress?.isComplete
                                 ? 'Waiting for other managers to finish their drafts…'
-                                : 'Loading your draft…'}
+                                : 'Syncing draft…'}
                         </div>
                     )}
                 </div>
@@ -121,12 +133,14 @@ export const DraftBoard: React.FC = () => {
                         </h3>
                         <FormationPitch
                             formationId={myFormation}
-                            draftedPlayers={state.draftedPlayers}
+                            draftedPlayers={draftedPlayers}
                             managerId={state.currentUser.id}
                             compact
                         />
                         <div className="mt-3 flex justify-between text-xs text-slate-400">
-                            <span>{myPickCount}/{PICKS_PER_MANAGER} picked</span>
+                            <span>
+                                {myPickCount}/{PICKS_PER_MANAGER} picked
+                            </span>
                             <span>{myManager?.rerollsRemaining ?? 0} rerolls left</span>
                         </div>
                     </div>
@@ -139,14 +153,20 @@ export const DraftBoard: React.FC = () => {
                     <div className="space-y-2">
                         {state.managers.map((m) => {
                             const progress = state.managerDraftProgress[m.id];
-                            const picks = state.draftedPlayers.filter((p) => p.pickedBy === m.id).length;
+                            const picks = draftedPlayers.filter((p) => p.pickedBy === m.id).length;
                             const done = progress?.isComplete || picks >= PICKS_PER_MANAGER;
                             return (
                                 <div
                                     key={m.id}
                                     className="flex justify-between items-center text-sm bg-slate-900/50 rounded-lg px-3 py-2"
                                 >
-                                    <span className={m.id === state.currentUser?.id ? 'text-brand-accent font-semibold' : 'text-slate-300'}>
+                                    <span
+                                        className={
+                                            m.id === state.currentUser?.id
+                                                ? 'text-brand-accent font-semibold'
+                                                : 'text-slate-300'
+                                        }
+                                    >
                                         {m.name}
                                     </span>
                                     <span className={done ? 'text-green-400' : 'text-slate-400'}>
@@ -163,7 +183,7 @@ export const DraftBoard: React.FC = () => {
                         Draft Log
                     </h3>
                     <div className="space-y-2">
-                        {state.logs
+                        {logs
                             .slice()
                             .reverse()
                             .slice(0, 20)

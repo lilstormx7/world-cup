@@ -82,23 +82,27 @@ export async function joinRoom(
     const manager = createManager(joinerInput);
     let resultShared: SharedRoomState | null = null;
 
-    const txResult = await runTransaction(roomRef(code), (current) => {
-        if (!current) return current;
-        const room = current as SharedRoomState;
-        if (room.status !== 'lobby') return current;
-        if (room.managers.some((m) => m.id === manager.id)) {
-            resultShared = room;
-            return room;
-        }
-        const updated: SharedRoomState = {
-            ...room,
-            revision: room.revision + 1,
-            managers: [...room.managers, manager],
-            logs: [...room.logs, `${manager.name} joined the room.`],
-        };
-        resultShared = updated;
-        return updated;
-    });
+    const txResult = await runTransaction(
+        roomRef(code),
+        (current) => {
+            if (current == null) return;
+            const room = current as SharedRoomState;
+            if (room.status !== 'lobby') return;
+            if (room.managers.some((m) => m.id === manager.id)) {
+                resultShared = room;
+                return room;
+            }
+            const updated: SharedRoomState = {
+                ...room,
+                revision: room.revision + 1,
+                managers: [...room.managers, manager],
+                logs: [...room.logs, `${manager.name} joined the room.`],
+            };
+            resultShared = updated;
+            return updated;
+        },
+        { applyLocally: false },
+    );
 
     if (!txResult.committed || !resultShared) {
         return { ok: false, error: 'Could not join room. Try again.' };
@@ -121,17 +125,21 @@ export async function commitRoomUpdate(
 
     await get(dbRef);
 
-    const txResult = await runTransaction(dbRef, (current) => {
-        if (current == null) return;
-        const room = current as SharedRoomState;
-        const { revision: _revision, roomCode: _roomCode, ...fields } = patch;
-        return sanitizeForFirebase({
-            ...room,
-            ...fields,
-            roomCode: room.roomCode,
-            revision: room.revision + 1,
-        });
-    });
+    const txResult = await runTransaction(
+        dbRef,
+        (current) => {
+            if (current == null) return;
+            const room = current as SharedRoomState;
+            const { revision: _revision, roomCode: _roomCode, ...fields } = patch;
+            return sanitizeForFirebase({
+                ...room,
+                ...fields,
+                roomCode: room.roomCode,
+                revision: room.revision + 1,
+            });
+        },
+        { applyLocally: false },
+    );
 
     if (!txResult.committed) {
         throw new Error('Room update was not committed');
