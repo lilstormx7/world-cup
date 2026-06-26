@@ -54,7 +54,8 @@ type Action =
     | { type: 'ADD_MOCK_MANAGER'; payload: ManagerInput }
     | { type: 'UPDATE_ROOM_SETTINGS'; payload: Partial<RoomSettings> }
     | { type: 'SET_FORMATION'; payload: { managerId: string; formation: import('./data').FormationId } }
-    | { type: 'START_DRAFT' }
+    | { type: 'START_FORMATION' }
+    | { type: 'START_DRAFTING' }
     | { type: 'DRAFT_PLAYER'; payload: { player: SquadPlayer; managerId: string } }
     | { type: 'REROLL'; payload: { managerId: string } }
     | { type: 'TICK_TIMER' }
@@ -83,7 +84,8 @@ const initialState: DraftState = {
 };
 
 const HOST_ONLY_ACTIONS = new Set<Action['type']>([
-    'START_DRAFT',
+    'START_FORMATION',
+    'START_DRAFTING',
     'UPDATE_ROOM_SETTINGS',
     'TICK_TIMER',
     'ADD_MOCK_MANAGER',
@@ -93,7 +95,8 @@ const SYNC_ACTIONS = new Set<Action['type']>([
     'ADD_MOCK_MANAGER',
     'UPDATE_ROOM_SETTINGS',
     'SET_FORMATION',
-    'START_DRAFT',
+    'START_FORMATION',
+    'START_DRAFTING',
     'DRAFT_PLAYER',
     'REROLL',
     'TICK_TIMER',
@@ -360,13 +363,13 @@ function reducer(state: DraftState, action: Action): DraftState {
             };
             if (withBot.status === 'formation_select') {
                 const botFormation = pickRandomFormation();
-                return maybeBeginParallelDraft({
+                return {
                     ...withBot,
                     managers: withBot.managers.map((m) =>
                         m.id === bot.id ? { ...m, formation: botFormation } : m,
                     ),
-                    logs: [...withBot.logs, `${bot.name} chose ${botFormation}.`],
-                });
+                    logs: [...withBot.logs, `${bot.name} submitted ${botFormation}.`],
+                };
             }
             return withBot;
         }
@@ -391,26 +394,36 @@ function reducer(state: DraftState, action: Action): DraftState {
                     state.currentUser?.id === action.payload.managerId
                         ? { ...state.currentUser, formation: action.payload.formation }
                         : state.currentUser,
-                logs: [...state.logs, `${managerName} chose ${action.payload.formation}.`],
+                logs: [...state.logs, `${managerName} submitted ${action.payload.formation}.`],
             };
-            return maybeBeginParallelDraft(next);
+            return next;
         }
 
-        case 'START_DRAFT': {
+        case 'START_FORMATION': {
             const managers = state.managers.map((m) =>
                 m.name.startsWith('Bot')
-                    ? { ...m, formation: m.formation ?? pickRandomFormation() }
-                    : m,
+                    ? { ...m, formation: pickRandomFormation() }
+                    : { ...m, formation: null },
             );
-            const next: DraftState = {
+            const currentUser = state.currentUser
+                ? {
+                      ...state.currentUser,
+                      formation:
+                          managers.find((m) => m.id === state.currentUser?.id)?.formation ?? null,
+                  }
+                : null;
+            return {
                 ...state,
                 managers,
+                currentUser,
                 status: 'formation_select',
                 managerDraftProgress: {},
-                logs: [...state.logs, 'Choose your formation before the draft begins.'],
+                logs: [...state.logs, 'Formation phase started. Choose and submit your formation.'],
             };
-            return maybeBeginParallelDraft(next);
         }
+
+        case 'START_DRAFTING':
+            return maybeBeginParallelDraft(state);
 
         case 'DRAFT_PLAYER':
             return applyPlayerDraft(state, action.payload.managerId, action.payload.player);

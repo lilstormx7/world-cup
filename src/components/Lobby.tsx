@@ -51,7 +51,7 @@ export const Lobby: React.FC = () => {
             alert('No national teams match your filters. Adjust years or continents.');
             return;
         }
-        dispatch({ type: 'START_DRAFT' });
+        dispatch({ type: 'START_FORMATION' });
     };
 
     const addMockUser = () => {
@@ -113,7 +113,7 @@ export const Lobby: React.FC = () => {
                             className="flex items-center gap-2 bg-brand-accent hover:bg-brand-accentHover text-white px-6 py-2 rounded-lg font-bold transition-all shadow-lg hover:shadow-brand-accent/50 disabled:opacity-50"
                         >
                             <Play size={20} fill="currentColor" />
-                            Start Draft
+                            Start Formation
                         </button>
                     )}
                 </div>
