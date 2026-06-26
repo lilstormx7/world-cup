@@ -86,7 +86,13 @@ export interface DraftedPlayer extends SquadPlayer {
 
 export type GameStatus = 'landing' | 'lobby' | 'formation_select' | 'drafting' | 'post_draft';
 
-
+export interface ManagerDraftProgress {
+    activeNationalTeamId: string | null;
+    timer: number;
+    turnStartedAt?: number;
+    picksCompleted: number;
+    isComplete: boolean;
+}
 
 export interface DraftState {
 
@@ -134,6 +140,9 @@ export interface DraftState {
 
     /** Epoch ms when the current draft turn timer started. */
     turnStartedAt?: number;
+
+    /** Per-manager parallel draft progress. */
+    managerDraftProgress: Record<string, ManagerDraftProgress>;
 
 }
 

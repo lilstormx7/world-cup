@@ -141,3 +141,55 @@ export function pickRandomFormation(): FormationId {
     const ids = Object.keys(FORMATIONS) as FormationId[];
     return ids[Math.floor(Math.random() * ids.length)];
 }
+
+export const PICKS_PER_MANAGER = 11;
+
+export function createEmptyManagerDraftProgress(settings: RoomSettings): import('./types').ManagerDraftProgress {
+    return {
+        activeNationalTeamId: null,
+        timer: settings.draftTimeSeconds,
+        picksCompleted: 0,
+        isComplete: false,
+    };
+}
+
+export function initManagerDraftProgress(
+    settings: RoomSettings,
+    excludeIds: string[] = [],
+): import('./types').ManagerDraftProgress {
+    const team = pickRandomNationalTeam(settings, excludeIds);
+    return {
+        activeNationalTeamId: team?.id ?? null,
+        timer: settings.draftTimeSeconds,
+        turnStartedAt: Date.now(),
+        picksCompleted: 0,
+        isComplete: false,
+    };
+}
+
+export function getManagerPickCount(managerId: string, draftedPlayers: DraftedPlayer[]): number {
+    return draftedPlayers.filter((p) => p.pickedBy === managerId).length;
+}
+
+export function allManagersDraftComplete(
+    managers: Manager[],
+    draftedPlayers: DraftedPlayer[],
+    progress: Record<string, import('./types').ManagerDraftProgress>,
+): boolean {
+    if (managers.length === 0) return false;
+    return managers.every((m) => {
+        const p = progress[m.id];
+        return p?.isComplete === true || getManagerPickCount(m.id, draftedPlayers) >= PICKS_PER_MANAGER;
+    });
+}
+
+export function pickRandomSelectablePlayer(
+    team: NationalTeam,
+    formationId: FormationId,
+    draftedPlayers: DraftedPlayer[],
+    managerId: string,
+): SquadPlayer | null {
+    const selectable = getSelectablePlayers(team, formationId, draftedPlayers, managerId);
+    if (selectable.length === 0) return null;
+    return selectable[Math.floor(Math.random() * selectable.length)];
+}

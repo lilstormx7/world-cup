@@ -8,14 +8,20 @@ interface PlayerListProps {
     onDraft: (player: SquadPlayer) => void;
     managerId: string;
     isMyTurn: boolean;
+    activeNationalTeamId: string | null;
 }
 
-export const PlayerList: React.FC<PlayerListProps> = ({ onDraft, managerId, isMyTurn }) => {
+export const PlayerList: React.FC<PlayerListProps> = ({
+    onDraft,
+    managerId,
+    isMyTurn,
+    activeNationalTeamId,
+}) => {
     const { state } = useDraft();
     const [search, setSearch] = React.useState('');
 
     const manager = state.managers.find((m) => m.id === managerId);
-    const team = getNationalTeamById(state.activeNationalTeamId);
+    const team = getNationalTeamById(activeNationalTeamId);
 
     const { selectableIds, playersWithStatus } = useMemo(() => {
         if (!team || !manager?.formation) {

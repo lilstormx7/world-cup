@@ -23,6 +23,7 @@ export interface SharedRoomState {
     lastSimulatedMatchId: string | null;
     simulationSeed?: number;
     turnStartedAt?: number;
+    managerDraftProgress: Record<string, import('../types').ManagerDraftProgress>;
 }
 
 export function createInitialSharedRoom(
@@ -45,6 +46,7 @@ export function createInitialSharedRoom(
         playbackIndex: 0,
         revealIndex: 0,
         lastSimulatedMatchId: null,
+        managerDraftProgress: {},
     };
 }
 
@@ -72,6 +74,7 @@ export function extractShared(state: DraftState): SharedRoomState {
         lastSimulatedMatchId: state.lastSimulatedMatchId,
         simulationSeed: state.simulationSeed,
         turnStartedAt: state.turnStartedAt,
+        managerDraftProgress: state.managerDraftProgress,
     };
 }
 
@@ -106,6 +109,7 @@ export function mergeSharedIntoState(
         lastSimulatedMatchId: shared.lastSimulatedMatchId,
         simulationSeed: shared.simulationSeed,
         turnStartedAt: shared.turnStartedAt,
+        managerDraftProgress: shared.managerDraftProgress ?? {},
         currentUser,
     };
 }

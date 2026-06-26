@@ -4,41 +4,34 @@ import { PlayerList } from './PlayerList';
 import { FormationPitch } from './FormationPitch';
 import { Clock, RefreshCw } from 'lucide-react';
 import { SquadPlayer } from '../data';
-import { getNationalTeamById, getSelectablePlayers } from '../draftLogic';
+import { getNationalTeamById, getSelectablePlayers, PICKS_PER_MANAGER } from '../draftLogic';
 
 export const DraftBoard: React.FC = () => {
     const { state, dispatch } = useDraft();
-    const currentManagerId = state.draftOrder[state.currentTurnIndex];
-    const currentManager = state.managers.find((m) => m.id === currentManagerId);
-    const isMyTurn = currentManagerId === state.currentUser?.id;
     const myManager = state.managers.find((m) => m.id === state.currentUser?.id);
-    const activeTeam = getNationalTeamById(state.activeNationalTeamId);
-
-    const roundNumber = Math.floor(state.currentTurnIndex / state.managers.length) + 1;
-    const pickNumber = state.currentTurnIndex + 1;
-
-    const upcomingPicks = state.draftOrder
-        .slice(state.currentTurnIndex, state.currentTurnIndex + 5)
-        .map((id, idx) => ({
-            manager: state.managers.find((m) => m.id === id),
-            isCurrent: idx === 0,
-            pickNum: state.currentTurnIndex + idx + 1,
-        }));
+    const myProgress = state.currentUser
+        ? state.managerDraftProgress[state.currentUser.id]
+        : undefined;
+    const isMyTurn = Boolean(myProgress && !myProgress.isComplete);
+    const activeTeam = getNationalTeamById(myProgress?.activeNationalTeamId ?? null);
+    const myPickCount = state.draftedPlayers.filter(
+        (p) => p.pickedBy === state.currentUser?.id,
+    ).length;
 
     const handleDraftPlayer = (player: SquadPlayer) => {
-        if (!isMyTurn || !myManager?.formation || !activeTeam) return;
+        if (!isMyTurn || !myManager?.formation || !activeTeam || !state.currentUser) return;
 
         const selectable = getSelectablePlayers(
             activeTeam,
             myManager.formation,
             state.draftedPlayers,
-            state.currentUser!.id,
+            state.currentUser.id,
         );
         if (!selectable.some((p) => p.id === player.id)) return;
 
         dispatch({
             type: 'DRAFT_PLAYER',
-            payload: { player, managerId: state.currentUser!.id },
+            payload: { player, managerId: state.currentUser.id },
         });
     };
 
@@ -55,17 +48,23 @@ export const DraftBoard: React.FC = () => {
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4 mb-4 bg-slate-800/80 p-4 rounded-xl border border-slate-700">
                     <div>
                         <div className="text-brand-accent text-sm font-bold uppercase tracking-wider mb-1">
-                            Round {roundNumber} · Pick {pickNumber}
+                            Parallel Draft · {myPickCount}/{PICKS_PER_MANAGER} picks
                         </div>
                         <h2 className="text-xl font-bold text-white flex items-center gap-3 flex-wrap">
-                            {currentManager?.name}&apos;s turn
-                            {isMyTurn && (
-                                <span className="bg-brand-accent text-white text-xs px-2 py-1 rounded animate-pulse">
-                                    YOUR TURN
-                                </span>
+                            {myProgress?.isComplete ? (
+                                'Your squad is complete'
+                            ) : (
+                                <>
+                                    Your draft
+                                    {isMyTurn && (
+                                        <span className="bg-brand-accent text-white text-xs px-2 py-1 rounded animate-pulse">
+                                            DRAFTING
+                                        </span>
+                                    )}
+                                </>
                             )}
                         </h2>
-                        {activeTeam && (
+                        {activeTeam && isMyTurn && (
                             <p className="text-slate-400 text-sm mt-1">
                                 Drafting from{' '}
                                 <span className="text-white font-semibold">
@@ -74,8 +73,8 @@ export const DraftBoard: React.FC = () => {
                             </p>
                         )}
                     </div>
-                    <div className="flex items-center gap-3">
-                        {isMyTurn && (
+                    {isMyTurn && (
+                        <div className="flex items-center gap-3">
                             <button
                                 onClick={handleReroll}
                                 disabled={(myManager?.rerollsRemaining ?? 0) <= 0}
@@ -84,39 +83,31 @@ export const DraftBoard: React.FC = () => {
                                 <RefreshCw size={16} />
                                 Reroll ({myManager?.rerollsRemaining ?? 0})
                             </button>
-                        )}
-                        <div
-                            className={`flex items-center gap-2 text-3xl font-mono font-bold ${state.timer <= 10 ? 'text-red-500 animate-pulse' : 'text-amber-400'}`}
-                        >
-                            <Clock size={28} />
-                            {state.timer}s
-                        </div>
-                    </div>
-                </div>
-
-                <div className="mb-4 flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
-                    {upcomingPicks.map((pick, i) => (
-                        <div
-                            key={i}
-                            className={`flex-shrink-0 px-4 py-2 rounded-lg border flex flex-col items-center min-w-[110px]
-                                ${pick.isCurrent ? 'bg-brand-accent/20 border-brand-accent ring-2 ring-brand-accent/50' : 'bg-slate-800/50 border-slate-700'}`}
-                        >
-                            <span className="text-xs text-slate-400">Pick {pick.pickNum}</span>
-                            <span
-                                className={`font-bold truncate w-full text-center text-sm ${pick.isCurrent ? 'text-brand-accent' : 'text-slate-300'}`}
+                            <div
+                                className={`flex items-center gap-2 text-3xl font-mono font-bold ${(myProgress?.timer ?? 0) <= 10 ? 'text-red-500 animate-pulse' : 'text-amber-400'}`}
                             >
-                                {pick.manager?.name}
-                            </span>
+                                <Clock size={28} />
+                                {myProgress?.timer ?? 0}s
+                            </div>
                         </div>
-                    ))}
+                    )}
                 </div>
 
                 <div className="flex-1 bg-slate-800/50 rounded-xl border border-slate-700 overflow-hidden flex flex-col min-h-[320px]">
-                    <PlayerList
-                        onDraft={handleDraftPlayer}
-                        managerId={state.currentUser?.id ?? ''}
-                        isMyTurn={isMyTurn}
-                    />
+                    {isMyTurn ? (
+                        <PlayerList
+                            onDraft={handleDraftPlayer}
+                            managerId={state.currentUser?.id ?? ''}
+                            isMyTurn={isMyTurn}
+                            activeNationalTeamId={myProgress?.activeNationalTeamId ?? null}
+                        />
+                    ) : (
+                        <div className="flex items-center justify-center h-full text-slate-400 p-8 text-center">
+                            {myProgress?.isComplete
+                                ? 'Waiting for other managers to finish their drafts…'
+                                : 'Loading your draft…'}
+                        </div>
+                    )}
                 </div>
             </div>
 
@@ -133,14 +124,37 @@ export const DraftBoard: React.FC = () => {
                             compact
                         />
                         <div className="mt-3 flex justify-between text-xs text-slate-400">
-                            <span>
-                                {state.draftedPlayers.filter((p) => p.pickedBy === state.currentUser?.id).length}
-                                /11 picked
-                            </span>
+                            <span>{myPickCount}/{PICKS_PER_MANAGER} picked</span>
                             <span>{myManager.rerollsRemaining} rerolls left</span>
                         </div>
                     </div>
                 )}
+
+                <div className="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
+                    <h3 className="font-bold text-lg mb-3 text-white border-b border-slate-700 pb-2">
+                        Manager Progress
+                    </h3>
+                    <div className="space-y-2">
+                        {state.managers.map((m) => {
+                            const progress = state.managerDraftProgress[m.id];
+                            const picks = state.draftedPlayers.filter((p) => p.pickedBy === m.id).length;
+                            const done = progress?.isComplete || picks >= PICKS_PER_MANAGER;
+                            return (
+                                <div
+                                    key={m.id}
+                                    className="flex justify-between items-center text-sm bg-slate-900/50 rounded-lg px-3 py-2"
+                                >
+                                    <span className={m.id === state.currentUser?.id ? 'text-brand-accent font-semibold' : 'text-slate-300'}>
+                                        {m.name}
+                                    </span>
+                                    <span className={done ? 'text-green-400' : 'text-slate-400'}>
+                                        {done ? 'Done' : `${picks}/${PICKS_PER_MANAGER}`}
+                                    </span>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
 
                 <div className="bg-slate-800/80 p-4 rounded-xl border border-slate-700 flex-1 overflow-auto max-h-64 lg:max-h-none">
                     <h3 className="font-bold text-lg mb-3 text-white border-b border-slate-700 pb-2">

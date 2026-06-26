@@ -16,17 +16,22 @@ import {
     RoomSettings,
     DEFAULT_ROOM_SETTINGS,
     Continent,
+    ManagerDraftProgress,
 } from './types';
 import { SquadPlayer, playerRatings } from './data';
 import { resolvePlayerSimValue } from './ratings/resolveOverall';
 import {
     allManagersHaveFormation,
+    allManagersDraftComplete,
     assignPlayerToSlot,
-    generateSnakeDraft,
     getNationalTeamById,
     getSelectablePlayers,
+    getManagerPickCount,
+    initManagerDraftProgress,
     pickRandomFormation,
     pickRandomNationalTeam,
+    pickRandomSelectablePlayer,
+    PICKS_PER_MANAGER,
 } from './draftLogic';
 
 import { simulateTournament } from './tournament/engine';
@@ -53,6 +58,7 @@ type Action =
     | { type: 'DRAFT_PLAYER'; payload: { player: SquadPlayer; managerId: string } }
     | { type: 'REROLL'; payload: { managerId: string } }
     | { type: 'TICK_TIMER' }
+    | { type: 'AUTO_DRAFT_PICK'; payload: { managerId: string } }
     | { type: 'START_SIMULATION'; payload?: { seed: number } }
     | { type: 'ADVANCE_PLAYBACK' };
 
@@ -73,7 +79,28 @@ const initialState: DraftState = {
     revealIndex: 0,
     lastSimulatedMatchId: null,
     revision: 0,
+    managerDraftProgress: {},
 };
+
+const HOST_ONLY_ACTIONS = new Set<Action['type']>([
+    'START_DRAFT',
+    'UPDATE_ROOM_SETTINGS',
+    'TICK_TIMER',
+    'ADD_MOCK_MANAGER',
+]);
+
+const SYNC_ACTIONS = new Set<Action['type']>([
+    'ADD_MOCK_MANAGER',
+    'UPDATE_ROOM_SETTINGS',
+    'SET_FORMATION',
+    'START_DRAFT',
+    'DRAFT_PLAYER',
+    'REROLL',
+    'TICK_TIMER',
+    'AUTO_DRAFT_PICK',
+    'START_SIMULATION',
+    'ADVANCE_PLAYBACK',
+]);
 
 function createManager(base: ManagerInput): Manager {
     return { ...base, formation: null, rerollsRemaining: 3 };
@@ -83,68 +110,208 @@ function newManagerId(): string {
     return globalThis.crypto?.randomUUID?.() ?? Date.now().toString();
 }
 
-function assignTeamForCurrentPicker(state: DraftState, excludeIds: string[] = []): DraftState {
-    const managerId = state.draftOrder[state.currentTurnIndex];
-    if (!managerId) return state;
-
-    const team = pickRandomNationalTeam(state.settings, excludeIds);
+function drawTeamForManager(
+    progress: ManagerDraftProgress,
+    settings: RoomSettings,
+    managerName: string,
+    excludeIds: string[] = [],
+): { progress: ManagerDraftProgress; log?: string } {
+    const team = pickRandomNationalTeam(settings, excludeIds);
     if (!team) {
-        return {
-            ...state,
-            logs: [...state.logs, 'No national teams match the room filters. Adjust settings in the lobby.'],
-        };
+        return { progress: { ...progress, activeNationalTeamId: null } };
     }
-
     return {
-        ...state,
-        activeNationalTeamId: team.id,
-        timer: state.settings.draftTimeSeconds,
-        turnStartedAt: Date.now(),
-        logs: [...state.logs, `${state.managers.find((m) => m.id === managerId)?.name} draws ${team.country} ${team.year}.`],
+        progress: {
+            ...progress,
+            activeNationalTeamId: team.id,
+            timer: settings.draftTimeSeconds,
+            turnStartedAt: Date.now(),
+        },
+        log: `${managerName} draws ${team.country} ${team.year}.`,
     };
 }
 
-function advanceTurn(state: DraftState): DraftState {
-    const nextTurnIndex = state.currentTurnIndex + 1;
-    const isOver = nextTurnIndex >= state.draftOrder.length;
-
-    if (isOver) {
-        return {
-            ...state,
-            currentTurnIndex: nextTurnIndex,
-            activeNationalTeamId: null,
-            status: 'post_draft',
-            logs: [...state.logs, 'Draft complete! All squads are locked.'],
-        };
-    }
-
-    const nextState: DraftState = {
-        ...state,
-        currentTurnIndex: nextTurnIndex,
-        activeNationalTeamId: null,
-        timer: state.settings.draftTimeSeconds,
-    };
-    return assignTeamForCurrentPicker(nextState);
-}
-
-function maybeBeginDraft(state: DraftState): DraftState {
+function maybeBeginParallelDraft(state: DraftState): DraftState {
     if (state.status !== 'formation_select' || !allManagersHaveFormation(state.managers)) {
         return state;
     }
 
-    const managerIds = state.managers.map((m) => m.id);
-    const draftOrder = generateSnakeDraft(managerIds, 11);
-    const draftingState: DraftState = {
+    const logs = [...state.logs, 'All formations locked. The draft begins!'];
+    let draftingState: DraftState = {
         ...state,
         status: 'drafting',
-        draftOrder,
+        draftOrder: [],
         currentTurnIndex: 0,
         draftedPlayers: [],
-        timer: state.settings.draftTimeSeconds,
-        logs: [...state.logs, 'All formations locked. The draft begins!'],
+        logs,
         activeNationalTeamId: null,
+        managerDraftProgress: {},
     };
-    return assignTeamForCurrentPicker(draftingState);
+
+    const progress: Record<string, ManagerDraftProgress> = {};
+    for (const manager of draftingState.managers) {
+        const { progress: p, log } = drawTeamForManager(
+            initManagerDraftProgress(draftingState.settings),
+            draftingState.settings,
+            manager.name,
+        );
+        progress[manager.id] = p;
+        if (log) draftingState = { ...draftingState, logs: [...draftingState.logs, log] };
+    }
+
+    return { ...draftingState, managerDraftProgress: progress };
+}
+
+function finishDraftIfComplete(state: DraftState): DraftState {
+    if (!allManagersDraftComplete(state.managers, state.draftedPlayers, state.managerDraftProgress)) {
+        return state;
+    }
+    return {
+        ...state,
+        status: 'post_draft',
+        activeNationalTeamId: null,
+        managerDraftProgress: Object.fromEntries(
+            Object.entries(state.managerDraftProgress).map(([id, p]) => [
+                id,
+                { ...p, isComplete: true, activeNationalTeamId: null },
+            ]),
+        ),
+        logs: [...state.logs, 'Draft complete! All squads are locked.'],
+    };
+}
+
+function applyPlayerDraft(
+    state: DraftState,
+    managerId: string,
+    player: SquadPlayer,
+    autoPick = false,
+): DraftState {
+    const manager = state.managers.find((m) => m.id === managerId);
+    const progress = state.managerDraftProgress[managerId];
+    if (!manager?.formation || !progress || progress.isComplete) return state;
+
+    const team = getNationalTeamById(progress.activeNationalTeamId);
+    if (!team) return state;
+
+    const selectable = getSelectablePlayers(
+        team,
+        manager.formation,
+        state.draftedPlayers,
+        managerId,
+    );
+    if (!selectable.some((p) => p.id === player.id)) return state;
+
+    const slot = assignPlayerToSlot(player, manager.formation, state.draftedPlayers, managerId);
+    if (!slot) return state;
+
+    const resolvedOverall = resolvePlayerSimValue(
+        player,
+        team.year,
+        state.settings,
+        playerRatings,
+    );
+
+    const draftedPlayer: DraftedPlayer = {
+        ...player,
+        overall: resolvedOverall,
+        pickedBy: managerId,
+        pickNumber: state.draftedPlayers.length + 1,
+        slotIndex: slot.slotIndex,
+        assignedPosition: slot.assignedPosition,
+    };
+
+    const picksCompleted = getManagerPickCount(managerId, state.draftedPlayers) + 1;
+    const isComplete = picksCompleted >= PICKS_PER_MANAGER;
+
+    let updatedProgress = { ...progress, picksCompleted, isComplete };
+    const logs = [
+        ...state.logs,
+        autoPick
+            ? `${manager.name} auto-drafted ${player.name} from ${team.country} ${team.year} (time expired).`
+            : `${manager.name} drafted ${player.name} from ${team.country} ${team.year}.`,
+    ];
+
+    if (!isComplete) {
+        const exclude = progress.activeNationalTeamId ? [progress.activeNationalTeamId] : [];
+        const drawn = drawTeamForManager(updatedProgress, state.settings, manager.name, exclude);
+        updatedProgress = drawn.progress;
+        if (drawn.log) logs.push(drawn.log);
+    } else {
+        updatedProgress = { ...updatedProgress, activeNationalTeamId: null, timer: 0 };
+    }
+
+    const next: DraftState = {
+        ...state,
+        draftedPlayers: [...state.draftedPlayers, draftedPlayer],
+        managerDraftProgress: {
+            ...state.managerDraftProgress,
+            [managerId]: updatedProgress,
+        },
+        logs,
+    };
+
+    return finishDraftIfComplete(next);
+}
+
+function applyAutoDraftPick(state: DraftState, managerId: string): DraftState {
+    const manager = state.managers.find((m) => m.id === managerId);
+    const progress = state.managerDraftProgress[managerId];
+    if (!manager?.formation || !progress || progress.isComplete) return state;
+
+    let team = getNationalTeamById(progress.activeNationalTeamId);
+    if (!team) return state;
+
+    let player = pickRandomSelectablePlayer(
+        team,
+        manager.formation,
+        state.draftedPlayers,
+        managerId,
+    );
+
+    if (!player) {
+        const exclude = progress.activeNationalTeamId ? [progress.activeNationalTeamId] : [];
+        const newTeam = pickRandomNationalTeam(state.settings, exclude);
+        if (!newTeam) return state;
+
+        const updatedProgress: ManagerDraftProgress = {
+            ...progress,
+            activeNationalTeamId: newTeam.id,
+            timer: state.settings.draftTimeSeconds,
+            turnStartedAt: Date.now(),
+        };
+        team = newTeam;
+        player = pickRandomSelectablePlayer(
+            team,
+            manager.formation,
+            state.draftedPlayers,
+            managerId,
+        );
+
+        if (!player) {
+            return {
+                ...state,
+                managerDraftProgress: {
+                    ...state.managerDraftProgress,
+                    [managerId]: updatedProgress,
+                },
+                logs: [
+                    ...state.logs,
+                    `${manager.name} drew ${team.country} ${team.year} but no valid auto-pick was available.`,
+                ],
+            };
+        }
+
+        state = {
+            ...state,
+            managerDraftProgress: {
+                ...state.managerDraftProgress,
+                [managerId]: updatedProgress,
+            },
+            logs: [...state.logs, `${manager.name} draws ${team.country} ${team.year}.`],
+        };
+    }
+
+    return applyPlayerDraft(state, managerId, player, true);
 }
 
 function reducer(state: DraftState, action: Action): DraftState {
@@ -193,7 +360,7 @@ function reducer(state: DraftState, action: Action): DraftState {
             };
             if (withBot.status === 'formation_select') {
                 const botFormation = pickRandomFormation();
-                return maybeBeginDraft({
+                return maybeBeginParallelDraft({
                     ...withBot,
                     managers: withBot.managers.map((m) =>
                         m.id === bot.id ? { ...m, formation: botFormation } : m,
@@ -205,7 +372,6 @@ function reducer(state: DraftState, action: Action): DraftState {
         }
 
         case 'UPDATE_ROOM_SETTINGS':
-            if (!state.currentUser?.isHost) return state;
             return {
                 ...state,
                 settings: { ...state.settings, ...action.payload },
@@ -227,11 +393,10 @@ function reducer(state: DraftState, action: Action): DraftState {
                         : state.currentUser,
                 logs: [...state.logs, `${managerName} chose ${action.payload.formation}.`],
             };
-            return maybeBeginDraft(next);
+            return maybeBeginParallelDraft(next);
         }
 
         case 'START_DRAFT': {
-            if (!state.currentUser?.isHost) return state;
             const managers = state.managers.map((m) =>
                 m.name.startsWith('Bot')
                     ? { ...m, formation: m.formation ?? pickRandomFormation() }
@@ -241,70 +406,24 @@ function reducer(state: DraftState, action: Action): DraftState {
                 ...state,
                 managers,
                 status: 'formation_select',
+                managerDraftProgress: {},
                 logs: [...state.logs, 'Choose your formation before the draft begins.'],
             };
-            return maybeBeginDraft(next);
+            return maybeBeginParallelDraft(next);
         }
 
-        case 'DRAFT_PLAYER': {
-            const { player, managerId } = action.payload;
-            const manager = state.managers.find((m) => m.id === managerId);
-            const team = getNationalTeamById(state.activeNationalTeamId);
-
-            if (!manager?.formation || !team) return state;
-            if (state.draftOrder[state.currentTurnIndex] !== managerId) return state;
-            if (!team.players.some((p) => p.id === player.id)) return state;
-
-            const selectable = getSelectablePlayers(
-                team,
-                manager.formation,
-                state.draftedPlayers,
-                managerId,
-            );
-            if (!selectable.some((p) => p.id === player.id)) return state;
-
-            const slot = assignPlayerToSlot(
-                player,
-                manager.formation,
-                state.draftedPlayers,
-                managerId,
-            );
-            if (!slot) return state;
-
-            const resolvedOverall = resolvePlayerSimValue(
-                player,
-                team.year,
-                state.settings,
-                playerRatings,
-            );
-
-            const draftedPlayer: DraftedPlayer = {
-                ...player,
-                overall: resolvedOverall,
-                pickedBy: managerId,
-                pickNumber: state.currentTurnIndex + 1,
-                slotIndex: slot.slotIndex,
-                assignedPosition: slot.assignedPosition,
-            };
-
-            return advanceTurn({
-                ...state,
-                draftedPlayers: [...state.draftedPlayers, draftedPlayer],
-                logs: [
-                    ...state.logs,
-                    `${manager.name} drafted ${player.name} from ${team.country} ${team.year}.`,
-                ],
-            });
-        }
+        case 'DRAFT_PLAYER':
+            return applyPlayerDraft(state, action.payload.managerId, action.payload.player);
 
         case 'REROLL': {
             const { managerId } = action.payload;
             const manager = state.managers.find((m) => m.id === managerId);
-            if (!manager || state.draftOrder[state.currentTurnIndex] !== managerId) return state;
+            const progress = state.managerDraftProgress[managerId];
+            if (!manager || !progress || progress.isComplete) return state;
             if (manager.rerollsRemaining <= 0) return state;
 
-            const exclude = state.activeNationalTeamId ? [state.activeNationalTeamId] : [];
-            const team = pickRandomNationalTeam(state.settings, exclude);
+            const exclude = progress.activeNationalTeamId ? [progress.activeNationalTeamId] : [];
+            const drawn = drawTeamForManager(progress, state.settings, manager.name, exclude);
             const updatedManagers = state.managers.map((m) =>
                 m.id === managerId ? { ...m, rerollsRemaining: m.rerollsRemaining - 1 } : m,
             );
@@ -313,9 +432,7 @@ function reducer(state: DraftState, action: Action): DraftState {
                 ...state.logs,
                 `${manager.name} used a reroll (${manager.rerollsRemaining - 1} left).`,
             ];
-            if (team) {
-                logs.push(`${manager.name} draws ${team.country} ${team.year}.`);
-            }
+            if (drawn.log) logs.push(drawn.log);
 
             return {
                 ...state,
@@ -324,18 +441,40 @@ function reducer(state: DraftState, action: Action): DraftState {
                     state.currentUser?.id === managerId
                         ? { ...state.currentUser, rerollsRemaining: manager.rerollsRemaining - 1 }
                         : state.currentUser,
-                activeNationalTeamId: team?.id ?? null,
-                timer: state.settings.draftTimeSeconds,
-                turnStartedAt: Date.now(),
+                managerDraftProgress: {
+                    ...state.managerDraftProgress,
+                    [managerId]: drawn.progress,
+                },
                 logs,
             };
         }
 
-        case 'TICK_TIMER':
-            return {
-                ...state,
-                timer: Math.max(0, state.timer - 1),
-            };
+        case 'AUTO_DRAFT_PICK':
+            return applyAutoDraftPick(state, action.payload.managerId);
+
+        case 'TICK_TIMER': {
+            if (state.status !== 'drafting') return state;
+
+            let next = state;
+            for (const manager of state.managers) {
+                const progress = next.managerDraftProgress[manager.id];
+                if (!progress || progress.isComplete) continue;
+
+                const newTimer = Math.max(0, progress.timer - 1);
+                next = {
+                    ...next,
+                    managerDraftProgress: {
+                        ...next.managerDraftProgress,
+                        [manager.id]: { ...progress, timer: newTimer },
+                    },
+                };
+
+                if (newTimer === 0) {
+                    next = applyAutoDraftPick(next, manager.id);
+                }
+            }
+            return next;
+        }
 
         case 'START_SIMULATION': {
             const seed = action.payload?.seed ?? state.simulationSeed ?? Date.now();
@@ -431,18 +570,6 @@ function reducer(state: DraftState, action: Action): DraftState {
     }
 }
 
-const SYNC_ACTIONS = new Set<Action['type']>([
-    'ADD_MOCK_MANAGER',
-    'UPDATE_ROOM_SETTINGS',
-    'SET_FORMATION',
-    'START_DRAFT',
-    'DRAFT_PLAYER',
-    'REROLL',
-    'TICK_TIMER',
-    'START_SIMULATION',
-    'ADVANCE_PLAYBACK',
-]);
-
 type DraftContextValue = {
     state: DraftState;
     dispatch: (action: Action) => void;
@@ -488,9 +615,13 @@ export const DraftProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
     const pushSharedState = useCallback(async (nextState: DraftState) => {
         if (!nextState.roomCode || !isFirebaseConfigured()) return;
-        const shared = extractShared(nextState);
-        shared.revision = (stateRef.current.revision ?? 0) + 1;
-        await updateRoom(shared);
+        try {
+            const shared = extractShared(nextState);
+            shared.revision = (stateRef.current.revision ?? 0) + 1;
+            await updateRoom(shared);
+        } catch {
+            setRoomError('Failed to sync room. Check your connection.');
+        }
     }, []);
 
     useEffect(() => {
@@ -527,6 +658,21 @@ export const DraftProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
         return clearSubscription;
     }, [subscribeToRoom, clearSubscription]);
+
+    const syncAndDispatch = useCallback(
+        (action: Action) => {
+            const prev = stateRef.current;
+            const next = reducer(prev, action);
+            if (next === prev) return;
+
+            rawDispatch(action);
+
+            if (next.roomCode && SYNC_ACTIONS.has(action.type)) {
+                void pushSharedState(next);
+            }
+        },
+        [pushSharedState],
+    );
 
     const dispatch = useCallback(
         (action: Action) => {
@@ -635,28 +781,34 @@ export const DraftProvider: React.FC<{ children: ReactNode }> = ({ children }) =
                 return;
             }
 
-            if (action.type === 'START_SIMULATION') {
-                const seed = stateRef.current.simulationSeed ?? Date.now();
-                const simAction: Action = { type: 'START_SIMULATION', payload: { seed } };
-                const next = reducer(stateRef.current, simAction);
-                if (next === stateRef.current) return;
-                rawDispatch(simAction);
-                void pushSharedState(next);
+            if (HOST_ONLY_ACTIONS.has(action.type) && !stateRef.current.currentUser?.isHost) {
                 return;
             }
 
-            const prev = stateRef.current;
-            const next = reducer(prev, action);
-            if (next === prev) return;
-
-            rawDispatch(action);
-
-            if (next.roomCode && SYNC_ACTIONS.has(action.type)) {
-                if (action.type === 'TICK_TIMER' && !prev.currentUser?.isHost) return;
-                void pushSharedState(next);
+            if (
+                action.type === 'DRAFT_PLAYER' &&
+                action.payload.managerId !== stateRef.current.currentUser?.id
+            ) {
+                return;
             }
+
+            if (
+                action.type === 'REROLL' &&
+                action.payload.managerId !== stateRef.current.currentUser?.id
+            ) {
+                return;
+            }
+
+            if (action.type === 'START_SIMULATION') {
+                if (!stateRef.current.currentUser?.isHost) return;
+                const seed = stateRef.current.simulationSeed ?? Date.now();
+                syncAndDispatch({ type: 'START_SIMULATION', payload: { seed } });
+                return;
+            }
+
+            syncAndDispatch(action);
         },
-        [pushSharedState, subscribeToRoom],
+        [pushSharedState, subscribeToRoom, syncAndDispatch],
     );
 
     return (
